@@ -1,13 +1,18 @@
 import yaml
+import argparse
 import os
 import datetime
 from dateutil.relativedelta import relativedelta
 from sentinelhub.geo_utils import bbox_to_dimensions
 from sentinelhub import SHConfig, SentinelHubRequest, BBox, CRS, DataCollection, MimeType, MosaickingOrder
+from PIL import Image, ImageEnhance
 import matplotlib.pyplot as plt
 
 # GLOBAL VARIABLES
 CONFIG_PATH = "config.yaml"
+RAW_DATA_FOLDER = "raw_data/"
+PROCESSED_DATA_FOLDER_256 = "processed_data_256/"
+BRIGHTNESS_FACTOR = 1.5
 RESOLUTION = 10
 KAISHA_ISLAND_BOUNDING_BOX = BBox(bbox=[120.556068, 32.003272, 120.692711, 32.078502], crs=CRS.WGS84)
 KAISHA_SIZE = bbox_to_dimensions(KAISHA_ISLAND_BOUNDING_BOX, resolution=RESOLUTION)
@@ -81,7 +86,7 @@ def download_single_image(bbox, size, cfg, evalscript, time_interval=("2024-10-0
     image = request.get_data()[0]
     return image
 
-def download_images_to_disk(bbox, size, cfg, evalscript, time_interval=("2020-1-01", "2023-12-31"), output_dir="data/"):
+def download_images_to_disk(bbox, size, cfg, evalscript, time_interval=("2023-1-01", "2023-12-31"), output_dir=RAW_DATA_FOLDER):
     """
     Download all images from Sentinel Hub in the given interval and save them to disk
     For each month, a single image mosaicked by least CC is downloaded
@@ -110,9 +115,116 @@ def download_images_to_disk(bbox, size, cfg, evalscript, time_interval=("2020-1-
 
     print("All images downloaded and saved to disk")
 
+def crop_and_process_images(input_dir, output_dir, tile_size=(256,256), brightness_factor=BRIGHTNESS_FACTOR):
+    """
+    Crop and normalize the images to the given size
+
+    :param input_dir: directory containing the images
+    :param output_dir: directory to save the processed images
+    :param size: size of the cropped images
+    """
+
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    for filename in os.listdir(input_dir):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff')):
+            img_path = os.path.join(input_dir, filename)
+            try:
+                with Image.open(img_path).convert('RGB') as img:
+                    width, height = img.size
+                    tiles_x = width // tile_size[0]
+                    tiles_y = height // tile_size[1]
+
+                    for i in range(tiles_y):
+                        for j in range(tiles_x):
+                            left = j * tile_size[0]
+                            upper = i * tile_size[1]
+                            right = left + tile_size[0]
+                            lower = upper + tile_size[1]
+
+                            # Crop the sub-image
+                            tile = img.crop((left, upper, right, lower))
+
+                            # Enhance brightness
+                            enhancer = ImageEnhance.Brightness(tile)
+                            tile_bright = enhancer.enhance(brightness_factor)
+
+                            # Save the processed tile
+                            tile_filename = f"{os.path.splitext(filename)[0]}_tile_{i}_{j}.png"
+                            tile_save_path = os.path.join(output_dir, tile_filename)
+                            tile_bright.save(tile_save_path)
+
+            except Exception as e:
+                print(f"Error processing {img_path}: {e}")
+
+    print(f"Processing completed. Processed images are saved in '{output_dir}'.")
+
+
 def main(args=None):
-    cfg = load_cfg_file(CONFIG_PATH)
-    download_images_to_disk(KAISHA_ISLAND_BOUNDING_BOX, KAISHA_SIZE, cfg, EVALSCRIPT_TRUE_COLOR)
+    parser = argparse.ArgumentParser(description="Download and preprocess Sentinel-2 images")
+
+    parser.add_argument(
+        '--config', '-c',
+        type=str,
+        default=CONFIG_PATH,
+        help="Path to the configuration file. Default is config.yaml."
+    )
+
+    parser.add_argument(
+        '--download', '-d',
+        nargs='?',
+        const=RAW_DATA_FOLDER,
+        default=None,
+        metavar='DOWNLOAD_PATH',
+        help="Download images to the specified path. Default is raw_data/."
+    )
+
+    parser.add_argument(
+        '--process', '-p',
+        nargs='*',
+        metavar=('RAW_DATA_FOLDER', 'PROCESSED_DATA_FOLDER_256'),
+        help="Process images in the specified directory and save the processed images to the output directory."
+    )
+
+    args = parser.parse_args()
+
+    cfg = load_cfg_file(args.config)
+
+    # Check if neither download nor process is specified
+    if args.download is None and args.process is None:
+        # Perform both download and process with default paths
+        download_output_dir = RAW_DATA_FOLDER
+        download_images_to_disk(
+            KAISHA_ISLAND_BOUNDING_BOX,
+            KAISHA_SIZE,
+            cfg,
+            EVALSCRIPT_TRUE_COLOR,
+            output_dir=download_output_dir
+        )
+        crop_and_process_images(RAW_DATA_FOLDER, PROCESSED_DATA_FOLDER_256)
+    else:
+        if args.download is not None:
+            download_output_dir = args.download if isinstance(args.download, str) else RAW_DATA_FOLDER
+            download_images_to_disk(
+                KAISHA_ISLAND_BOUNDING_BOX,
+                KAISHA_SIZE,
+                cfg,
+                EVALSCRIPT_TRUE_COLOR,
+                output_dir=download_output_dir
+            )
+
+        if args.process is not None:
+            if len(args.process) == 2:
+                raw_data_path, target_path = args.process
+            elif len(args.process) == 1:
+                raw_data_path = args.process[0]
+                target_path = PROCESSED_DATA_FOLDER_256
+            else:  # len(args.process) == 0
+                raw_data_path = RAW_DATA_FOLDER
+                target_path = PROCESSED_DATA_FOLDER_256
+            crop_and_process_images(raw_data_path, target_path)
+
 
 if __name__=="__main__":
     main()
