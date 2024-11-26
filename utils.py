@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 CONFIG_PATH = "config.yaml"
 RAW_DATA_FOLDER = "raw_data/"
 PROCESSED_DATA_FOLDER_256 = "processed_data_256/"
-BRIGHTNESS_FACTOR = 1.5
+BRIGHTNESS_FACTOR = 2.0
+GAMMA = 0.8
 RESOLUTION = 10
 KAISHA_ISLAND_BOUNDING_BOX = BBox(bbox=[120.556068, 32.003272, 120.692711, 32.078502], crs=CRS.WGS84)
 KAISHA_SIZE = bbox_to_dimensions(KAISHA_ISLAND_BOUNDING_BOX, resolution=RESOLUTION)
@@ -115,7 +116,7 @@ def download_images_to_disk(bbox, size, cfg, evalscript, time_interval=("2023-1-
 
     print("All images downloaded and saved to disk")
 
-def crop_and_process_images(input_dir, output_dir, tile_size=(256,256), brightness_factor=BRIGHTNESS_FACTOR):
+def crop_and_process_images(input_dir, output_dir, tile_size=(256,256), brightness_factor=BRIGHTNESS_FACTOR, gamma=GAMMA):
     """
     Crop and normalize the images to the given size
 
@@ -149,6 +150,14 @@ def crop_and_process_images(input_dir, output_dir, tile_size=(256,256), brightne
                             # Enhance brightness
                             enhancer = ImageEnhance.Brightness(tile)
                             tile_bright = enhancer.enhance(brightness_factor)
+
+                            if gamma != 1.0:
+                                inv_gamma = 1.0 / gamma
+                                # Create a lookup table for gamma correction
+                                table = [((c / 255.0) ** inv_gamma) * 255 for c in range(256)]
+                                # Since the image is RGB, replicate the table for each channel
+                                gamma_table = table * 3
+                                tile_bright = tile_bright.point(gamma_table)
 
                             # Save the processed tile
                             tile_filename = f"{os.path.splitext(filename)[0]}_tile_{i}_{j}.png"
